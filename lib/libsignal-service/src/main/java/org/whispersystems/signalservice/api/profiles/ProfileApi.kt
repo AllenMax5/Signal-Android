@@ -15,6 +15,7 @@ import org.signal.libsignal.zkgroup.profiles.ClientZkProfileOperations
 import org.signal.libsignal.zkgroup.profiles.ExpiringProfileKeyCredential
 import org.signal.libsignal.zkgroup.profiles.ProfileKey
 import org.signal.libsignal.zkgroup.profiles.ProfileKeyCredentialRequestContext
+import org.signal.network.trace.NetworkTrace
 import org.signal.network.NetworkResult
 import org.signal.network.crypto.SealedSenderAccess
 import org.signal.network.util.JsonUtil
@@ -96,6 +97,11 @@ class ProfileApi(
       null
     }
 
+    if (NetworkTrace.enabled) NetworkTrace.event("profile_commitment_pre_upload", mapOf(
+      "aci" to aci.toString(), "version" to profileWrite.version,
+      "commitment" to profileWrite.commitment, "boundary" to "local_pre_network",
+      "profileKeyUploaded" to false
+    ))
     val request = WebSocketRequestMessage.put("/v1/profile", profileWrite)
 
     return NetworkResult.fromWebSocketRequest(authWebSocket, request, String::class)
@@ -122,6 +128,12 @@ class ProfileApi(
     val profileVersion = profileKey.getProfileKeyVersion(aci.libSignalAci).serialize()
     val profileRequestContext = clientZkProfileOperations.createProfileKeyCredentialRequestContext(SecureRandom(), aci.libSignalAci, profileKey)
     val serializedProfileRequest = Hex.toStringCondensed(profileRequestContext.request.serialize())
+    if (NetworkTrace.enabled) NetworkTrace.event("profile_credential_request_created", mapOf(
+      "targetAci" to aci.toString(), "version" to profileVersion,
+      "credentialRequestHex" to serializedProfileRequest,
+      "commitment" to profileKey.getCommitment(aci.libSignalAci).serialize(),
+      "boundary" to "local_pre_network", "requestContextUploaded" to false
+    ))
 
     val request = WebSocketRequestMessage.get("/v1/profile/$aci/$profileVersion/$serializedProfileRequest?credentialType=expiringProfileKey")
     val converter = ProfileAndCredentialResponseConverter(clientZkProfileOperations, profileRequestContext)
@@ -213,8 +225,16 @@ class ProfileApi(
           if (it.expiringProfileKeyCredentialResponse != null) {
             try {
               val credential = clientZkProfileOperations.receiveExpiringProfileKeyCredential(requestContext, it.expiringProfileKeyCredentialResponse)
+              if (NetworkTrace.enabled) NetworkTrace.event("profile_credential_verified", mapOf(
+                "credentialRequest" to requestContext.request.serialize(), "credential" to credential.serialize(),
+                "verified" to true, "boundary" to "local_verification"
+              ))
               it to credential
             } catch (_: VerificationFailedException) {
+              if (NetworkTrace.enabled) NetworkTrace.event("profile_credential_verified", mapOf(
+                "credentialRequest" to requestContext.request.serialize(), "verified" to false,
+                "boundary" to "local_verification"
+              ))
               Log.w(TAG, "Failed to verify profile key credential! Ignoring it.")
               it to null
             }

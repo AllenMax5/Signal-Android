@@ -39,6 +39,7 @@ import org.signal.core.util.getLength
 import org.signal.core.util.logging.Log
 import org.signal.core.util.nullIfBlank
 import org.signal.libsignal.protocol.IdentityKeyPair
+import org.signal.network.trace.NetworkTrace
 import org.signal.libsignal.protocol.state.KyberPreKeyRecord
 import org.signal.libsignal.protocol.state.SignedPreKeyRecord
 import org.signal.libsignal.zkgroup.profiles.ProfileKey
@@ -743,6 +744,13 @@ class AppRegistrationStorageController(private val context: Context) : StorageCo
     }
 
     val aciIdentityKeyPair = IdentityKeyPair(accountData.aciIdentityKeyPair.toByteArray())
+    // 同一个恢复写入口覆盖注册、重注册与关联；在提交点保留上游设备模式。
+    if (NetworkTrace.enabled) NetworkTrace.event("aci_identity_key_registration_commit", mapOf(
+      "source" to if (accountData.linkedDeviceData != null) "linked_device_provisioning" else "primary_registration",
+      "aci" to accountData.aci,
+      "publicKey" to aciIdentityKeyPair.publicKey.serialize(),
+      "hadLocalKey" to SignalStore.account.hasAciIdentityKey()
+    ))
     SignalStore.account.restoreAciIdentityKeyFromBackup(aciIdentityKeyPair.publicKey.serialize(), aciIdentityKeyPair.privateKey.serialize())
 
     val pniIdentityKeyPair = accountData.pniIdentityKeyPair.takeIf { it.size > 0 }?.let { IdentityKeyPair(it.toByteArray()) }

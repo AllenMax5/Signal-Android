@@ -30,6 +30,7 @@ import org.signal.libsignal.net.ChatConnection
 import org.signal.libsignal.net.RequestResult
 import org.signal.libsignal.net.UnauthenticatedChatConnection
 import org.signal.network.crypto.SealedSenderAccess
+import org.signal.network.trace.NetworkTrace
 import org.signal.network.websocket.WebSocketRequestMessage
 import org.signal.network.websocket.WebSocketResponseMessage
 import org.signal.network.websocket.WebsocketResponse
@@ -176,29 +177,66 @@ sealed class SignalWebSocket(
   }
 
   fun request(request: WebSocketRequestMessage): Single<WebsocketResponse> {
-    return try {
+    return observedRequest(request) {
       restartDelayedDisconnectIfNecessary()
       getWebSocket().sendRequest(request)
-    } catch (e: IOException) {
-      Single.error(e)
     }
   }
 
   fun request(request: WebSocketRequestMessage, timeout: Duration): Single<WebsocketResponse> {
-    return try {
+    return observedRequest(request) {
       restartDelayedDisconnectIfNecessary()
       getWebSocket().sendRequest(request, timeout.inWholeSeconds)
-    } catch (e: IOException) {
-      Single.error(e)
     }
   }
 
-  /**
-   * Coroutine-friendly variant of [request].
-   */
+  private fun beginTrace(request: WebSocketRequestMessage): NetworkTrace.Call? {
+    return NetworkTrace.begin("websocket_request", "SignalWebSocket.request") {
+      mapOf(
+        "connection" to connectionName,
+        "method" to request.verb,
+        "path" to NetworkTrace.path(request.path.orEmpty()),
+        "protocolRequestId" to request.id,
+        "headers" to NetworkTrace.headers(
+          request.headers.mapNotNull {
+            val parts = it.split(':', limit = 2)
+            if (parts.size == 2) parts[0] to parts[1] else null
+          }.toMap()
+        ),
+        "headerLines" to request.headers,
+        "requestBody" to NetworkTrace.body(request.body?.toByteArray())
+      )
+    }
+  }
+
+  private fun observedRequest(request: WebSocketRequestMessage, send: () -> Single<WebsocketResponse>): Single<WebsocketResponse> {
+    val trace = beginTrace(request)
+    return try {
+      send()
+        .doOnSuccess { trace?.response(it.status, it.headers, it.body.toByteArray(Charsets.UTF_8)) }
+        .doOnError { trace?.error(it) }
+        .doFinally { trace?.cancel() }
+    } catch (e: IOException) {
+      trace?.error(e)
+      Single.error(e)
+    } catch (t: Throwable) {
+      trace?.error(t)
+      throw t
+    }
+  }
+
+  /** Coroutine-friendly variant; observation must not translate cancellation or network errors. */
   suspend fun requestSuspend(request: WebSocketRequestMessage, timeout: Duration = WebSocketConnection.DEFAULT_SEND_TIMEOUT): WebsocketResponse {
-    restartDelayedDisconnectIfNecessary()
-    return getWebSocket().sendRequestSuspend(request, timeout)
+    val trace = beginTrace(request)
+    try {
+      restartDelayedDisconnectIfNecessary()
+      return getWebSocket().sendRequestSuspend(request, timeout).also {
+        trace?.response(it.status, it.headers, it.body.toByteArray(Charsets.UTF_8))
+      }
+    } catch (t: Throwable) {
+      trace?.error(t)
+      throw t
+    }
   }
 
   @Throws(IOException::class)
@@ -491,6 +529,21 @@ sealed class SignalWebSocket(
         return EnvelopeResponse.Unparseable(this)
       }
 
+      if (NetworkTrace.enabled) {
+        // 该句柄在 libsignal 适配器中可能是伪 ID，不能当作跨设备的网络请求编号。
+        NetworkTrace.event(
+          "envelope_received",
+          mapOf(
+            "layer" to "client_event",
+            "localAdapterHandle" to id,
+            "type" to envelope.type?.name,
+            "sourceServiceId" to envelope.sourceServiceId,
+            "sourceDeviceId" to envelope.sourceDeviceId,
+            "clientTimestamp" to envelope.clientTimestamp,
+            "encryptedPayload" to envelope.content?.toByteArray()
+          )
+        )
+      }
       return EnvelopeResponse.Parsed(envelope, timestamp ?: 0, this)
     }
 

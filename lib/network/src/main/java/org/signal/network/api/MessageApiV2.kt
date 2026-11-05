@@ -24,6 +24,7 @@ import org.signal.libsignal.net.UnsealedSendFailure
 import org.signal.libsignal.net.UserBasedAuthorization
 import org.signal.libsignal.net.UserBasedSendAuthorization
 import org.signal.network.crypto.SealedSenderAccess
+import org.signal.network.trace.NetworkTrace
 import org.whispersystems.signalservice.api.websocket.SignalWebSocket
 
 /**
@@ -86,8 +87,10 @@ class MessageApiV2(
     onlineOnly: Boolean,
     urgent: Boolean
   ): RequestResult<Unit, UnsealedSendFailure> {
-    return authWebSocket.runCatchingWithChatConnection { connection ->
-      AuthMessagesService(connection).sendMessage(serviceId.libSignalServiceId, timestamp, contents, onlineOnly, urgent)
+    return NetworkTrace.observe("AuthMessagesService.sendMessage", { mapOf("destination" to serviceId.toString(), "timestamp" to timestamp, "contents" to NetworkTrace.outboundMessages(contents), "onlineOnly" to onlineOnly, "urgent" to urgent) }) {
+      authWebSocket.runCatchingWithChatConnection { connection ->
+        AuthMessagesService(connection).sendMessage(serviceId.libSignalServiceId, timestamp, contents, onlineOnly, urgent)
+      }
     }
   }
 
@@ -96,8 +99,10 @@ class MessageApiV2(
     contents: List<SingleOutboundUnsealedMessage>,
     urgent: Boolean
   ): RequestResult<Unit, SyncSendFailure> {
-    return authWebSocket.runCatchingWithChatConnection { connection ->
-      AuthMessagesService(connection).sendSyncMessage(timestamp, contents, urgent)
+    return NetworkTrace.observe("AuthMessagesService.sendSyncMessage", { mapOf("timestamp" to timestamp, "contents" to NetworkTrace.outboundMessages(contents), "urgent" to urgent) }) {
+      authWebSocket.runCatchingWithChatConnection { connection ->
+        AuthMessagesService(connection).sendSyncMessage(timestamp, contents, urgent)
+      }
     }
   }
 
@@ -110,8 +115,10 @@ class MessageApiV2(
     onlineOnly: Boolean,
     urgent: Boolean
   ): RequestResult<Unit, SealedSendFailure> {
-    return unauthWebSocket.runCatchingWithChatConnection { connection ->
-      UnauthMessagesService(connection).sendMessage(serviceId.libSignalServiceId, timestamp, contents, auth, onlineOnly, urgent)
+    return NetworkTrace.observe("UnauthMessagesService.sendMessage", { mapOf("destination" to serviceId.toString(), "timestamp" to timestamp, "contents" to NetworkTrace.outboundMessages(contents), "sendMode" to auth.javaClass.simpleName, "onlineOnly" to onlineOnly, "urgent" to urgent) }) {
+      unauthWebSocket.runCatchingWithChatConnection { connection ->
+        UnauthMessagesService(connection).sendMessage(serviceId.libSignalServiceId, timestamp, contents, auth, onlineOnly, urgent)
+      }
     }
   }
 

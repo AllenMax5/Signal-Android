@@ -84,8 +84,17 @@ public class GroupsV2Api {
       authCredentialWithPni = authOperations.receiveAuthCredentialWithoutPni(aci.getLibSignalAci(), Objects.requireNonNull(authCredentialSalt, "Missing auth credential salt for account without a PNI"), redemptionTimeSeconds, authCredentialWithPniResponse);
     }
 
+    GroupTrace.event("group_auth_credential_verified", () -> Map.of(
+        "aci", aci.toString(), "hasPni", pni != null, "redemptionTimeSeconds", redemptionTimeSeconds,
+        "credentialResponse", authCredentialWithPniResponse.serialize(), "boundary", "local_verification"));
     AuthCredentialPresentation authCredentialPresentation = authOperations.createAuthCredentialPresentation(new SecureRandom(), groupSecretParams, authCredentialWithPni);
 
+    GroupTrace.event("group_auth_presentation_created", () -> Map.of(
+        "groupIdentifier", groupSecretParams.getPublicParams().getGroupIdentifier().serialize(),
+        "groupPublicParams", groupSecretParams.getPublicParams().serialize(),
+        "presentation", authCredentialPresentation.serialize(),
+        "uuidCiphertext", authCredentialPresentation.getUuidCiphertext().serialize(),
+        "boundary", "local_pre_network", "serverVerificationObserved", false));
     return new GroupsV2AuthorizationString(groupSecretParams, authCredentialPresentation);
   }
 

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:networkSecurityConfig="@xml/debug_network_security_config">
+        <!-- 在 Application.onCreate 之前开始采集，以覆盖首次注册并在进程重启后续采。 -->
+        <provider
+            android:name="org.thoughtcrime.securesms.debugtrace.TraceStartupProvider"
+            android:authorities="${applicationId}.e2ee-trace-startup"
+            android:exported="false" />
+        <!-- 仅 Debug 暴露给 shell，普通第三方应用没有 DUMP 权限，不能开启采集。 -->
+        <receiver
+            android:name="org.thoughtcrime.securesms.debugtrace.TraceControlReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP" />
+    </application>
+</manifest>

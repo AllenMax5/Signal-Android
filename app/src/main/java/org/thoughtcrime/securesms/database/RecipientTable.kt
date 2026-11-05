@@ -53,6 +53,7 @@ import org.signal.libsignal.zkgroup.groups.GroupMasterKey
 import org.signal.libsignal.zkgroup.profiles.ExpiringProfileKeyCredential
 import org.signal.libsignal.zkgroup.profiles.ProfileKey
 import org.signal.remoteconfig.RemoteConfig
+import org.signal.network.trace.NetworkTrace
 import org.signal.storageservice.storage.protos.groups.local.DecryptedGroup
 import org.thoughtcrime.securesms.badges.Badges.toDatabaseBadge
 import org.thoughtcrime.securesms.color.MaterialColor
@@ -957,6 +958,12 @@ open class RecipientTable(context: Context, databaseHelper: SignalDatabase) : Da
       recipientId = RecipientId.from(id)
     }
 
+    // 记录存储服务记录实际落库后的 Profile Key，便于区分它与消息携带的来源。
+    if (NetworkTrace.enabled && insert.proto.profileKey.isNotEmpty()) NetworkTrace.event("contact_profile_key_observed", mapOf(
+      "source" to "storage_contact_insert", "recipientId" to recipientId.toString(),
+      "aci" to insert.proto.signalAci?.toString(), "profileKey" to insert.proto.profileKey.toByteArray(), "applied" to true
+    ))
+
     val profileKeyRotated = if (insert.proto.blocked) {
       RecipientUtil.updateProfileSharingAfterBlock(Recipient.resolved(recipientId), rotateProfileKeyOnBlock)
     } else {
@@ -1006,6 +1013,10 @@ open class RecipientTable(context: Context, databaseHelper: SignalDatabase) : Da
     }
 
     val recipientId = getByStorageKeyOrThrow(update.new.id.raw)
+    if (NetworkTrace.enabled && StorageSyncHelper.profileKeyChanged(update)) NetworkTrace.event("contact_profile_key_observed", mapOf(
+      "source" to "storage_contact_update", "recipientId" to recipientId.toString(),
+      "aci" to update.new.proto.signalAci?.toString(), "profileKey" to update.new.proto.profileKey.toByteArray(), "applied" to true
+    ))
     if (StorageSyncHelper.profileKeyChanged(update)) {
       val clearValues = ContentValues(1).apply {
         putNull(EXPIRING_PROFILE_KEY_CREDENTIAL)
@@ -1980,7 +1991,9 @@ open class RecipientTable(context: Context, databaseHelper: SignalDatabase) : Da
 
     for ((key, value) in profileKeys) {
       val recipientId = getOrInsertFromServiceId(key)
-      if (setProfileKeyIfAbsent(recipientId, value)) {
+      val applied = setProfileKeyIfAbsent(recipientId, value)
+      if (NetworkTrace.enabled) NetworkTrace.event("contact_profile_key_observed", mapOf("source" to "group_v2_non_authoritative", "recipientId" to recipientId.toString(), "aci" to key.toString(), "profileKey" to value.serialize(), "applied" to applied))
+      if (applied) {
         Log.i(TAG, "Learned new profile key")
         updated.add(recipientId)
       }
@@ -1997,7 +2010,9 @@ open class RecipientTable(context: Context, databaseHelper: SignalDatabase) : Da
         }
       } else {
         Log.i(TAG, "Profile key from owner $recipientId")
-        if (setProfileKey(recipientId, value)) {
+        val applied = setProfileKey(recipientId, value)
+        if (NetworkTrace.enabled) NetworkTrace.event("contact_profile_key_observed", mapOf("source" to "group_v2_authoritative", "recipientId" to recipientId.toString(), "aci" to key.toString(), "profileKey" to value.serialize(), "applied" to applied))
+        if (applied) {
           Log.i(TAG, "Learned new profile key from owner")
           updated.add(recipientId)
         }

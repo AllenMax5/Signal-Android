@@ -110,6 +110,11 @@ public final class GroupsV2Operations {
       throw new IllegalArgumentException("Members must not contain self");
     }
 
+    GroupTrace.event("group_secret_params_created", () -> java.util.Map.of(
+        "groupMasterKey", groupSecretParams.getMasterKey().serialize(),
+        "groupPublicParams", groupSecretParams.getPublicParams().serialize(),
+        "groupIdentifier", groupSecretParams.getPublicParams().getGroupIdentifier().serialize(),
+        "additionalCandidateCount", members.size(), "boundary", "local_secret"));
     final GroupOperations groupOperations = forGroup(groupSecretParams);
 
     Group.Builder group = new Group.Builder()
@@ -426,6 +431,11 @@ public final class GroupsV2Operations {
     private Member.Builder member(ExpiringProfileKeyCredential credential, Member.Role role) {
       ProfileKeyCredentialPresentation presentation = clientZkProfileOperations.createProfileKeyCredentialPresentation(new SecureRandom(), groupSecretParams, credential);
 
+      GroupTrace.event("group_profile_presentation_created", () -> java.util.Map.of(
+          "groupIdentifier", groupSecretParams.getPublicParams().getGroupIdentifier().serialize(),
+          "presentation", presentation.serialize(), "uuidCiphertext", presentation.getUuidCiphertext().serialize(),
+          "profileKeyCiphertext", presentation.getProfileKeyCiphertext().serialize(),
+          "role", role.name(), "boundary", "local_pre_network", "serverVerificationObserved", false));
       return new Member.Builder().role(role)
                                  .presentation(ByteString.of(presentation.serialize()));
     }
@@ -486,7 +496,7 @@ public final class GroupsV2Operations {
         decryptedBannedMembers.add(new DecryptedBannedMember.Builder().serviceIdBytes(decryptServiceIdToBinary(member.userId)).timestamp(member.timestamp).build());
       }
 
-      return new DecryptedGroup.Builder()
+      DecryptedGroup decrypted = new DecryptedGroup.Builder()
                                .title(decryptTitle(group.title))
                                .description(decryptDescription(group.description))
                                .isAnnouncementGroup(group.announcements_only ? EnabledState.ENABLED : EnabledState.DISABLED)
@@ -501,6 +511,11 @@ public final class GroupsV2Operations {
                                .bannedMembers(decryptedBannedMembers)
                                .terminated(group.terminated)
                                .build();
+      GroupTrace.event("group_state_decrypted", () -> java.util.Map.of(
+          "protobufType", "signal.DecryptedGroup", "protobuf", decrypted.encode(),
+          "groupIdentifier", groupSecretParams.getPublicParams().getGroupIdentifier().serialize(),
+          "boundary", "local_plaintext"));
+      return decrypted;
     }
 
     /**
@@ -527,6 +542,9 @@ public final class GroupsV2Operations {
         }
       }
 
+      GroupTrace.event("group_change_validation", () -> java.util.Map.of(
+          "signatureVerificationRequested", verification.verify(), "groupBindingChecked", verification.verify(),
+          "revision", actions.version, "boundary", "local_verification"));
       return Optional.of(decryptChange(actions));
     }
 
@@ -811,7 +829,12 @@ public final class GroupsV2Operations {
         }
       }
 
-      return builder.build();
+      DecryptedGroupChange decrypted = builder.build();
+      GroupTrace.event("group_change_decrypted", () -> java.util.Map.of(
+          "protobufType", "signal.DecryptedGroupChange", "protobuf", decrypted.encode(),
+          "groupIdentifier", groupSecretParams.getPublicParams().getGroupIdentifier().serialize(),
+          "boundary", "local_plaintext"));
+      return decrypted;
     }
 
     public DecryptedGroupJoinInfo decryptGroupJoinInfo(GroupJoinInfo joinInfo) {

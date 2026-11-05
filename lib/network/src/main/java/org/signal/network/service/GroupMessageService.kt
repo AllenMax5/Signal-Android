@@ -5,6 +5,7 @@
 
 package org.signal.network.service
 
+import org.signal.network.trace.NetworkTrace
 import arrow.core.Either
 import arrow.core.raise.either
 import kotlinx.coroutines.Dispatchers
@@ -121,6 +122,13 @@ class GroupMessageService @JvmOverloads constructor(
       val sendInfo = groupId?.let { loadGroupSendInfo(it, timestamp) }
       val targets = others.map { it.toTarget(senderCertificate, sendInfo, destination) }
       val (senderKeySend, fanOutTargets) = splitTargets(targets, sendInfo, senderCertificate, destination.isStory, timestamp)
+      if (NetworkTrace.enabled) NetworkTrace.event("group_send_path_selected", mapOf(
+        "groupId" to groupId?.serialize(), "distributionId" to distributionId.toString(),
+        "senderKeyTargets" to (senderKeySend?.targets?.map { it.serviceId.toString() } ?: emptyList<String>()),
+        "pairwiseTargets" to fanOutTargets.map { it.serviceId.toString() },
+        "isStory" to destination.isStory, "messageTimestamp" to timestamp,
+        "boundary" to "local_routing", "implementation" to "GroupMessageService"
+      ))
 
       val results = mutableListOf<RecipientSendResult>()
       val fanOut = fanOutTargets.toMutableList()

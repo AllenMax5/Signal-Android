@@ -14,6 +14,7 @@ import org.signal.core.util.logging.Log
 import org.signal.libsignal.zkgroup.InvalidInputException
 import org.signal.libsignal.zkgroup.groups.GroupMasterKey
 import org.signal.storage.keyvalue.PhoneNumberPrivacyValues
+import org.signal.network.trace.NetworkTrace
 import org.thoughtcrime.securesms.components.settings.app.chats.folders.ChatFolderRecord
 import org.thoughtcrime.securesms.conversation.colors.AvatarColor
 import org.thoughtcrime.securesms.database.GroupTable.ShowAsStoryState
@@ -210,7 +211,7 @@ object StorageSyncModels {
       throw AssertionError("Must have either a UUID or a phone number!")
     }
 
-    return SignalContactRecord.newBuilder(recipient.syncExtras.storageProto).apply {
+    val contact = SignalContactRecord.newBuilder(recipient.syncExtras.storageProto).apply {
       aciBinary = recipient.aci?.toByteString() ?: ByteString.EMPTY
       aci = ""
       e164 = recipient.e164 ?: ""
@@ -241,7 +242,15 @@ object StorageSyncModels {
       avatarColor = localToRemoteAvatarColor(recipient.avatarColor)
       notifyForCallsIfMuted = RecipientTable.NotificationSetting.toOptionalBool(recipient.callNotificationSetting)
       showUnreadReminders = RecipientTable.NotificationSetting.toOptionalBool(recipient.unreadReminder)
-    }.build().toSignalContactRecord(StorageId.forContact(rawStorageId))
+    }.build()
+    // 存储服务只收到加密记录；在加密前留下身份公钥和验证状态的本地证据。
+    if (NetworkTrace.enabled && recipient.syncExtras.identityKey != null) NetworkTrace.event("storage_contact_identity_pre_encrypt", mapOf(
+      "aci" to recipient.aci?.toString(),
+      "identityPublicKey" to recipient.syncExtras.identityKey,
+      "identityState" to contact.identityState.toString(),
+      "storageId" to rawStorageId
+    ))
+    return contact.toSignalContactRecord(StorageId.forContact(rawStorageId))
   }
 
   private fun localToRemoteGroupV2(recipient: RecipientRecord, rawStorageId: ByteArray?, groupMasterKey: GroupMasterKey): SignalGroupV2Record {

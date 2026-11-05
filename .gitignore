@@ -34,3 +34,7 @@ kls_database.db
 .kotlin
 lefthook-local.yml
 sample-videos/
+
+# Python capture-tool caches
+__pycache__/
+*.py[cod]

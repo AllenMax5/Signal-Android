@@ -98,6 +98,8 @@ public class SignalServiceCipher {
                                 Optional<byte[]> groupId)
       throws NoSessionException, UntrustedIdentityException, InvalidKeyException, InvalidRegistrationIdException
   {
+    org.whispersystems.signalservice.api.groupsv2.GroupTrace.proto(
+        "group_sender_key_content_pre_encrypt", "signalservice.Content", () -> unpaddedMessage, "local_plaintext");
     PushTransportDetails             transport            = new PushTransportDetails();
     SignalProtocolAddress            localProtocolAddress = new SignalProtocolAddress(localAddress.getIdentifier(), localDeviceId);
     SignalGroupCipher                groupCipher          = new SignalGroupCipher(sessionLock, new GroupCipher(signalProtocolStore, localProtocolAddress));
@@ -116,6 +118,17 @@ public class SignalServiceCipher {
                                      EnvelopeContent content)
       throws UntrustedIdentityException, InvalidKeyException, NoSessionException
   {
+    org.whispersystems.signalservice.api.groupsv2.GroupTrace.event("pairwise_content_pre_encrypt", () -> {
+      java.util.Map<String, Object> fields = new java.util.HashMap<>();
+      fields.put("destination", destination.getName());
+      fields.put("destinationDeviceId", destination.getDeviceId());
+      fields.put("boundary", "local_plaintext");
+      content.getContent().ifPresent(proto -> {
+        fields.put("protobufType", "signalservice.Content");
+        fields.put("protobuf", proto.encode());
+      });
+      return fields;
+    });
     SignalProtocolAddress localProtocolAddress = new SignalProtocolAddress(localAddress.getIdentifier(), localDeviceId);
     SignalSessionCipher   sessionCipher        = new SignalSessionCipher(sessionLock, new SessionCipher(signalProtocolStore, localProtocolAddress, destination));
     if (sealedSenderAccess != null) {

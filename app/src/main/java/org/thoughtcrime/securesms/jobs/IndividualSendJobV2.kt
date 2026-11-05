@@ -22,6 +22,7 @@ import org.signal.network.service.MessageService
 import org.signal.network.service.SendRequest
 import org.signal.network.service.SentTranscripts
 import org.signal.remoteconfig.RemoteConfig
+import org.signal.network.trace.NetworkTrace
 import org.thoughtcrime.securesms.BuildConfig
 import org.thoughtcrime.securesms.attachments.Attachment
 import org.thoughtcrime.securesms.attachments.DatabaseAttachment
@@ -196,6 +197,20 @@ class IndividualSendJobV2 private constructor(parameters: Parameters, private va
       Log.w(TAG, "${logPrefix(message.sentTimeMillis)} Failed to create a data message! Reason: $error")
       return Result.failure()
     }
+    // 本地消息 ID、明文与发送时间戳在进入逐设备加密前对应起来，便于区分正文、回执和同步副本。
+    if (NetworkTrace.enabled) NetworkTrace.event("outbound_message_pre_encrypt", mapOf(
+      "messageId" to messageId,
+      "threadId" to threadId,
+      "recipientId" to recipient.id.toString(),
+      // 同时保留候选身份和最终地址，避免仅凭合并后的联系人推断本次使用了哪套会话。
+      "recipientAci" to recipient.aci.orNull()?.toString(),
+      "recipientPni" to recipient.pni.orNull()?.toString(),
+      "localIdentityDomain" to "aci",
+      "destination" to recipient.serviceId.getOrNull()?.toString(),
+      "timestamp" to dataMessage.timestamp,
+      "body" to dataMessage.body,
+      "dataMessage" to dataMessage.encode()
+    ))
 
     Log.i(TAG, "${logPrefix(message.sentTimeMillis)} Sending message. Recipient: ${message.threadRecipient.id}, Thread: $threadId, Attachments: ${buildAttachmentString(message.attachments)}, Editing: ${originalEditedMessage?.dateSent ?: "N/A"}")
     SignalLocalMetrics.IndividualMessageSend.onDeliveryStarted(messageId, message.sentTimeMillis)
@@ -382,6 +397,7 @@ class IndividualSendJobV2 private constructor(parameters: Parameters, private va
     }
 
     if (SignalStore.account.isMultiDevice) {
+      if (NetworkTrace.enabled) NetworkTrace.event("outbound_sync_copy_start", mapOf("messageId" to messageId, "timestamp" to dataMessage.timestamp, "destination" to recipient.serviceId.getOrNull()?.toString()))
       sendSyncMessage(recipient, primaryResult).also {
         SignalLocalMetrics.IndividualMessageSend.onSyncMessageSent(messageId)
       }

@@ -35,6 +35,7 @@ import org.signal.core.util.requireLong
 import org.signal.core.util.requireNonNullString
 import org.signal.core.util.toOptional
 import org.signal.libsignal.protocol.IdentityKey
+import org.signal.network.trace.NetworkTrace
 import org.thoughtcrime.securesms.database.SignalDatabase.Companion.recipients
 import org.thoughtcrime.securesms.database.model.IdentityRecord
 import org.thoughtcrime.securesms.database.model.IdentityStoreRecord
@@ -182,6 +183,18 @@ class IdentityTable internal constructor(context: Context?, databaseHelper: Sign
     val keyMatches = hasMatchingKey(addressName, identityKey)
     val statusMatches = keyMatches && hasMatchingStatus(addressName, identityKey, verifiedStatus)
 
+    // 存储同步可能比消息式验证同步晚到；记录旧值与采用结果，才能在重测时核查乱序覆盖。
+    if (NetworkTrace.enabled) NetworkTrace.event("storage_identity_sync_before", mapOf(
+      "address" to addressName,
+      "recipientId" to recipientId.toString(),
+      "incomingIdentityPublicKey" to identityKey.serialize(),
+      "incomingStatus" to verifiedStatus.name,
+      "existingIdentityPublicKey" to existingRecord.orElse(null)?.identityKey?.serialize(),
+      "existingStatus" to existingRecord.orElse(null)?.verifiedStatus?.name,
+      "keyMatches" to keyMatches,
+      "statusMatches" to statusMatches
+    ))
+
     if (!keyMatches || !statusMatches) {
       saveIdentityInternal(addressName, recipientId, identityKey, verifiedStatus, !hadEntry, System.currentTimeMillis(), nonBlockingApproval = true)
 
@@ -197,6 +210,13 @@ class IdentityTable internal constructor(context: Context?, databaseHelper: Sign
       Log.w(TAG, "Updated identity key during storage sync for " + addressName + " | Existing: " + existingRecord.get().identityKey.hashCode() + ", New: " + identityKey.hashCode())
       IdentityUtil.markIdentityUpdate(context, recipientId)
     }
+    if (NetworkTrace.enabled) NetworkTrace.event("storage_identity_sync_after", mapOf(
+      "address" to addressName,
+      "recipientId" to recipientId.toString(),
+      "incomingIdentityPublicKey" to identityKey.serialize(),
+      "incomingStatus" to verifiedStatus.name,
+      "changed" to (!keyMatches || !statusMatches)
+    ))
   }
 
   fun delete(addressName: String) {

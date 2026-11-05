@@ -38,6 +38,7 @@ import org.signal.libsignal.protocol.message.PreKeySignalMessage
 import org.signal.libsignal.protocol.message.SignalMessage
 import org.signal.libsignal.protocol.state.PreKeyBundle
 import org.signal.network.api.KeysApiV2
+import org.signal.network.trace.NetworkTrace
 import org.signal.network.api.MessageApiV2
 import org.signal.network.crypto.SealedSenderAccess
 import org.signal.network.service.MessageService.SendError
@@ -405,6 +406,7 @@ open class IndividualMessageService(
   ): EncryptResult {
     val messages = targetDeviceIds(serviceId).map { deviceId ->
       val address = SignalProtocolAddress(serviceId.libSignalServiceId, deviceId)
+      traceSessionSelection(address, timestamp)
       if (!protocolStore.containsSession(address) && initializeSession(serviceId, address, sealedSenderAccess).bind() == SessionInitResult.InvalidAccessKeyForPreKeyFetch) {
         return EncryptResult.InvalidAccessKeyForPreKeyFetch
       }
@@ -417,6 +419,7 @@ open class IndividualMessageService(
   private suspend fun Raise<SendError>.encryptUnsealedForAllDevices(serviceId: ServiceId, envelopeContent: EnvelopeContent, timestamp: Long): List<OutgoingPushMessage> {
     return targetDeviceIds(serviceId).map { deviceId ->
       val address = SignalProtocolAddress(serviceId.libSignalServiceId, deviceId)
+      traceSessionSelection(address, timestamp)
       if (!protocolStore.containsSession(address)) {
         initializeSession(serviceId, address, sealedSenderAccess = null).bind()
       }
@@ -432,6 +435,13 @@ open class IndividualMessageService(
     timestamp: Long
   ): OutgoingPushMessage = try {
     withContext(EncryptionDispatcher) { cipher.encrypt(address, sealedSenderAccess, envelopeContent) }
+      .also {
+        if (NetworkTrace.enabled) NetworkTrace.event("identity_session_encrypted", mapOf(
+          "localServiceId" to localAci.toString(), "localDeviceId" to localDeviceId,
+          "destination" to address.name, "destinationDeviceId" to address.deviceId,
+          "messageTimestamp" to timestamp, "ciphertextType" to it.type
+        ))
+      }
   } catch (e: UntrustedIdentityException) {
     raise(SendError.IdentityMismatch(serviceId, e))
   } catch (e: InvalidKeyException) {
@@ -444,6 +454,16 @@ open class IndividualMessageService(
     Log.w(TAG, "[$timestamp] Invalid session for $address. Archiving so the next attempt rebuilds it.", e)
     protocolStore.archiveSession(address)
     raise(SendError.ApplicationError(e))
+  }
+
+  private fun traceSessionSelection(address: SignalProtocolAddress, timestamp: Long) {
+    // 在会话初始化前采集地址与库存，证明 PNI/ACI 是不同会话地址，而非联系人 UI 合并的推断。
+    if (NetworkTrace.enabled) NetworkTrace.event("identity_session_selected", mapOf(
+      "localServiceId" to localAci.toString(), "localDeviceId" to localDeviceId,
+      "destination" to address.name, "destinationDeviceId" to address.deviceId,
+      "messageTimestamp" to timestamp, "sessionPresentBefore" to protocolStore.containsSession(address),
+      "localIdentityPublicKey" to protocolStore.identityKeyPair.publicKey.serialize()
+    ))
   }
 
   private fun List<OutgoingPushMessage>.toSealedSenderContents(): List<SingleOutboundSealedSenderMessage> {
@@ -534,6 +554,12 @@ open class IndividualMessageService(
 
     try {
       SignalSessionBuilder(sessionLock, SessionBuilder(protocolStore, address, localProtocolAddress)).process(bundle)
+      // 初始化成功单独记事件，与前面的真实密钥请求及后续逐设备加密共同组成证据链。
+      if (NetworkTrace.enabled) NetworkTrace.event("identity_session_initialized", mapOf(
+        "localServiceId" to localAci.toString(), "destination" to address.name,
+        "destinationDeviceId" to address.deviceId, "remoteIdentityPublicKey" to response.identityKey,
+        "sessionPresentAfter" to protocolStore.containsSession(address)
+      ))
     } catch (e: UntrustedIdentityException) {
       raise(SendError.IdentityMismatch(serviceId, e))
     } catch (e: InvalidKeyException) {

@@ -45,6 +45,7 @@ import org.whispersystems.signalservice.api.SignalServiceMessageSender.SenderKey
 import org.whispersystems.signalservice.api.crypto.ContentHint;
 import org.whispersystems.signalservice.api.crypto.UntrustedIdentityException;
 import org.whispersystems.signalservice.api.groupsv2.GroupSendEndorsements;
+import org.whispersystems.signalservice.api.groupsv2.GroupTrace;
 import org.whispersystems.signalservice.api.messages.SendMessageResult;
 import org.whispersystems.signalservice.api.messages.SignalServiceDataMessage;
 import org.whispersystems.signalservice.api.messages.SignalServiceEditMessage;
@@ -343,6 +344,7 @@ public final class GroupSendUtil {
       }
     }
 
+    final int senderKeyEligibleBeforeMinimum = senderKeyTargets.size();
     // Enforce minimum number of sender key destinations
     if (SignalStore.internal().getRemoveSenderKeyMinimum()) {
       Log.i(TAG, "Sender key minimum removed. Using for " + senderKeyTargets.size() + " recipients.");
@@ -354,6 +356,14 @@ public final class GroupSendUtil {
       Log.i(TAG, "Can use sender key for " + senderKeyTargets.size() + "/" + allTargets.size() + " recipients.");
     }
 
+    GroupTrace.event("group_send_path_selected", () -> Map.of(
+        "groupId", String.valueOf(groupId), "distributionId", String.valueOf(distributionId),
+        "senderKeyEligibleBeforeMinimum", senderKeyEligibleBeforeMinimum,
+        "senderKeyTargets", senderKeyTargets.stream().map(r -> r.requireServiceId().toString()).collect(Collectors.toList()),
+        "pairwiseTargets", legacyTargets.stream().map(r -> r.requireServiceId().toString()).collect(Collectors.toList()),
+        "senderKeyMinimumRemoved", SignalStore.internal().getRemoveSenderKeyMinimum(),
+        "isStory", isStorySend, "messageTimestamp", sendOperation.getSentTimestamp(),
+        "messageId", String.valueOf(relatedMessageId), "boundary", "local_routing"));
     if (relatedMessageId != null && groupId != null) {
       SignalLocalMetrics.GroupMessageSend.onSenderKeyStarted(relatedMessageId.getId());
     }

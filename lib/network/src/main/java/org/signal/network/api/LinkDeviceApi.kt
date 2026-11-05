@@ -22,6 +22,7 @@ import org.signal.libsignal.protocol.IdentityKeyPair
 import org.signal.libsignal.protocol.ecc.ECPublicKey
 import org.signal.libsignal.zkgroup.profiles.ProfileKey
 import org.signal.network.NetworkResult
+import org.signal.network.trace.NetworkTrace
 import org.signal.network.websocket.WebSocketRequestMessage
 import org.signal.network.websocket.get
 import org.signal.network.websocket.put
@@ -55,8 +56,10 @@ class LinkDeviceApi(
    * Fetches a list of linked devices.
    */
   suspend fun getDevices(): RequestResult<List<LibSignalLinkedDevice>, Nothing> {
-    return authWebSocket.runCatchingWithChatConnection { connection ->
-      AuthDevicesService(connection).getDevices()
+    return NetworkTrace.observe("AuthDevicesService.getDevices", { emptyMap() }) {
+      authWebSocket.runCatchingWithChatConnection { connection ->
+        AuthDevicesService(connection).getDevices()
+      }
     }
   }
 
@@ -64,8 +67,10 @@ class LinkDeviceApi(
    * Remove and unlink a linked device.
    */
   suspend fun removeDevice(deviceId: Int): RequestResult<Unit, Nothing> {
-    return authWebSocket.runCatchingWithChatConnection { connection ->
-      AuthDevicesService(connection).removeDevice(deviceId)
+    return NetworkTrace.observe("AuthDevicesService.removeDevice", { mapOf("deviceId" to deviceId) }) {
+      authWebSocket.runCatchingWithChatConnection { connection ->
+        AuthDevicesService(connection).removeDevice(deviceId)
+      }
     }
   }
 
@@ -144,6 +149,31 @@ class LinkDeviceApi(
       pniBinary = sentPni?.toByteStringWithoutPrefix(),
       authCredentialSalt = authCredentialSalt?.toByteString()
     )
+    // 调试采集必须位于加密前，服务器只收到 ProvisioningMessage 密文；否则无法逐字段核对配置材料。
+    if (NetworkTrace.enabled) {
+      NetworkTrace.event("provisioning_message_plaintext", mapOf(
+        "deviceIdentifier" to deviceIdentifier,
+        "aciIdentityKeyPublic" to message.aciIdentityKeyPublic?.toByteArray(),
+        "aciIdentityKeyPrivate" to message.aciIdentityKeyPrivate?.toByteArray(),
+        "pniIdentityKeyPublic" to message.pniIdentityKeyPublic?.toByteArray(),
+        "pniIdentityKeyPrivate" to message.pniIdentityKeyPrivate?.toByteArray(),
+        "aci" to message.aci,
+        "pni" to message.pni,
+        "number" to message.number,
+        "provisioningCode" to message.provisioningCode,
+        "userAgent" to message.userAgent,
+        "profileKey" to message.profileKey?.toByteArray(),
+        "readReceipts" to message.readReceipts,
+        "provisioningVersion" to message.provisioningVersion,
+        "ephemeralBackupKey" to message.ephemeralBackupKey?.toByteArray(),
+        "accountEntropyPool" to message.accountEntropyPool,
+        "mediaRootBackupKey" to message.mediaRootBackupKey?.toByteArray(),
+        "aciBinary" to message.aciBinary?.toByteArray(),
+        "pniBinary" to message.pniBinary?.toByteArray(),
+        "authCredentialSalt" to message.authCredentialSalt?.toByteArray(),
+        "provisionMessageWire" to message.encode()
+      ))
+    }
     val ciphertext: ByteArray = cipher.encrypt(message)
     val body = ProvisioningMessage(Base64.encodeWithPadding(ciphertext))
 
@@ -224,8 +254,10 @@ class LinkDeviceApi(
    * A [DeviceIdNotFoundException] means there is no device with the given [deviceId].
    */
   suspend fun setDeviceName(encryptedDeviceName: ByteArray, deviceId: Int): RequestResult<Unit, DeviceIdNotFoundException> {
-    return authWebSocket.runCatchingWithChatConnection { connection ->
-      AuthDevicesService(connection).setDeviceName(deviceId, encryptedDeviceName)
+    return NetworkTrace.observe("AuthDevicesService.setDeviceName", { mapOf("deviceId" to deviceId, "encryptedName" to encryptedDeviceName) }) {
+      authWebSocket.runCatchingWithChatConnection { connection ->
+        AuthDevicesService(connection).setDeviceName(deviceId, encryptedDeviceName)
+      }
     }
   }
 

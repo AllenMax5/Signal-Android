@@ -27,6 +27,7 @@ import org.signal.core.util.logging.Log
 import org.signal.libsignal.protocol.IdentityKey
 import org.signal.libsignal.protocol.fingerprint.Fingerprint
 import org.signal.libsignal.protocol.fingerprint.NumericFingerprintGenerator
+import org.signal.network.trace.NetworkTrace
 import org.thoughtcrime.securesms.crypto.ProfileKeyUtil
 import org.thoughtcrime.securesms.crypto.ReentrantSessionLock
 import org.thoughtcrime.securesms.database.IdentityTable
@@ -196,6 +197,16 @@ class VerifyDisplayScreenViewModel(
         val remoteIdentifier = resolved.requireAci().toByteArray()
         val version = 2
         aciFingerprint = SafetyNumberFingerprint(version, localIdentifier, localIdentity, remoteIdentifier, remoteIdentity, generator.createFor(version, localIdentifier, localIdentity, remoteIdentifier, remoteIdentity))
+        // 人工安全号码是本地两份身份公钥的函数；记录输入和显示值才能与对端截图逐字段对应。
+        if (NetworkTrace.enabled) NetworkTrace.event("safety_number_displayed", mapOf(
+          "recipientId" to recipientId.toString(),
+          "version" to version,
+          "localAci" to SignalStore.account.requireAci().toString(),
+          "remoteAci" to resolved.requireAci().toString(),
+          "localIdentityPublicKey" to localIdentity.serialize(),
+          "remoteIdentityPublicKey" to remoteIdentity.serialize(),
+          "displayText" to aciFingerprint.fingerprint.displayableFingerprint.displayText
+        ))
       }
 
       internalState.update { state -> state.copy(fingerprintHolder = aciFingerprint?.let { FingerprintHolder.Initialised(it) } ?: FingerprintHolder.NoFingerprintAvailable) }
@@ -203,6 +214,7 @@ class VerifyDisplayScreenViewModel(
   }
 
   fun updateSafetyNumberVerification(verified: Boolean) {
+    if (NetworkTrace.enabled) NetworkTrace.event("safety_number_manual_mark_requested", mapOf("recipientId" to recipientId.toString(), "verified" to verified, "remoteIdentityPublicKey" to remoteIdentity.serialize()))
     internalState.update { it.copy(isSafetyNumberVerified = verified) }
 
     val recipientId: RecipientId = recipientId
@@ -241,6 +253,15 @@ class VerifyDisplayScreenViewModel(
           )
         StorageSyncHelper.scheduleSyncForDataChange()
         IdentityUtil.markIdentityVerified(context, recipient.get(), verified, false)
+        // 仅记录两条同步路径已排队，不能把本地落库误写成关联设备已收到或服务端已持久化。
+        if (NetworkTrace.enabled) NetworkTrace.event("safety_number_sync_queued", mapOf(
+          "recipientId" to recipientId.toString(),
+          "remoteAci" to resolved.requireAci().toString(),
+          "remoteIdentityPublicKey" to remoteIdentity.serialize(),
+          "verified" to verified,
+          "jobs" to listOf("MultiDeviceVerifiedUpdateJob", "StorageSyncJob")
+        ))
+        if (NetworkTrace.enabled) NetworkTrace.event("safety_number_manual_mark_saved", mapOf("recipientId" to recipientId.toString(), "verified" to verified, "remoteAci" to resolved.requireAci().toString()))
       }
     }
   }

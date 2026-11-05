@@ -26,6 +26,7 @@ import org.signal.storage.keyvalue.integerValue
 import org.signal.storage.keyvalue.longValue
 import org.signal.storage.keyvalue.nullableBlobValue
 import org.signal.storage.keyvalue.stringValue
+import org.signal.network.trace.NetworkTrace
 import org.thoughtcrime.securesms.backup.v2.BackupRepository
 import org.thoughtcrime.securesms.crypto.MasterCipher
 import org.thoughtcrime.securesms.crypto.ProfileKeyUtil
@@ -341,6 +342,7 @@ class AccountValues internal constructor(store: KeyValueStore, context: Context)
   fun generateAciIdentityKeyIfNecessary() {
     synchronized(this) {
       if (store.containsKey(KEY_ACI_IDENTITY_PUBLIC_KEY)) {
+        if (NetworkTrace.enabled) NetworkTrace.event("aci_identity_key_selected", mapOf("source" to "existing_local", "publicKey" to getBlob(KEY_ACI_IDENTITY_PUBLIC_KEY, null)))
         Log.w(TAG, "Tried to generate an ACI identity, but one was already set!", Throwable())
         return
       }
@@ -353,6 +355,8 @@ class AccountValues internal constructor(store: KeyValueStore, context: Context)
         .putBlob(KEY_ACI_IDENTITY_PUBLIC_KEY, key.publicKey.serialize())
         .putBlob(KEY_ACI_IDENTITY_PRIVATE_KEY, key.privateKey.serialize())
         .commit()
+      // 记录身份钥的来源，重装后才能区分新生成与复用，避免仅凭注册请求推断。
+      if (NetworkTrace.enabled) NetworkTrace.event("aci_identity_key_selected", mapOf("source" to "generated_local", "publicKey" to key.publicKey.serialize()))
     }
   }
 
@@ -410,11 +414,15 @@ class AccountValues internal constructor(store: KeyValueStore, context: Context)
     synchronized(this) {
       Log.i(TAG, "Setting a new ACI identity key pair.")
 
+      val previousPublicKey = if (store.containsKey(KEY_ACI_IDENTITY_PUBLIC_KEY)) getBlob(KEY_ACI_IDENTITY_PUBLIC_KEY, null) else null
+
       store
         .beginWrite()
         .putBlob(KEY_ACI_IDENTITY_PUBLIC_KEY, publicKey)
         .putBlob(KEY_ACI_IDENTITY_PRIVATE_KEY, privateKey)
         .commit()
+      // 恢复入口包含不同上游流程；保留前后公钥，由调用链事件进一步判定来源。
+      if (NetworkTrace.enabled) NetworkTrace.event("aci_identity_key_restored", mapOf("previousPublicKey" to previousPublicKey, "publicKey" to publicKey, "changed" to (previousPublicKey?.contentEquals(publicKey) != true)))
     }
   }
 

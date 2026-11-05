@@ -4,6 +4,7 @@ import org.signal.core.util.logging.Log
 import org.signal.libsignal.net.KeyTransparency.CheckMode
 import org.signal.libsignal.net.RequestResult
 import org.signal.network.crypto.UnidentifiedAccess
+import org.signal.network.trace.NetworkTrace
 import org.thoughtcrime.securesms.crypto.ProfileKeyUtil
 import org.thoughtcrime.securesms.database.model.KeyTransparencyStore
 import org.thoughtcrime.securesms.dependencies.AppDependencies
@@ -31,17 +32,29 @@ object VerifySafetyNumberRepository {
     }
 
     val aciIdentityKey = identityRecord.get().identityKey
+    val unidentifiedAccessKey = UnidentifiedAccess.deriveAccessKeyFrom(profileKey)
+
+    // 同时记录自动验证的输入与本地 Profile Key，才能把 search 的访问凭证追溯到来源事件。
+    if (NetworkTrace.enabled) NetworkTrace.event("safety_number_automatic_inputs", mapOf(
+      "recipientId" to recipient.id.toString(),
+      "aci" to recipient.requireAci().toString(),
+      "e164" to recipient.requireE164(),
+      "identityPublicKey" to aciIdentityKey.serialize(),
+      "profileKey" to profileKey.serialize(),
+      "unidentifiedAccessKey" to unidentifiedAccessKey
+    ))
 
     val result = SignalNetwork.keyTransparencyApi.check(
       checkMode = CheckMode.Contact,
       aci = recipient.requireAci().libSignalAci,
       aciIdentityKey = aciIdentityKey,
       e164 = recipient.requireE164(),
-      unidentifiedAccessKey = profileKey.let { UnidentifiedAccess.deriveAccessKeyFrom(it) },
+      unidentifiedAccessKey = unidentifiedAccessKey,
       usernameHash = null,
       keyTransparencyStore = KeyTransparencyStore
     )
 
+    if (NetworkTrace.enabled) NetworkTrace.event("safety_number_automatic_result", mapOf("recipientId" to recipient.id.toString(), "aci" to recipient.requireAci().toString(), "resultType" to result.javaClass.name))
     Log.i(TAG, "Key transparency complete, result: $result")
     return when (result) {
       is RequestResult.Success -> {

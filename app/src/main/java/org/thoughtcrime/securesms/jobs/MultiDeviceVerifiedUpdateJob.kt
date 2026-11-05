@@ -4,6 +4,7 @@ import org.signal.core.models.recipients.RecipientId
 import org.signal.core.util.Base64
 import org.signal.core.util.logging.Log
 import org.signal.core.util.orNull
+import org.signal.network.trace.NetworkTrace
 import org.signal.libsignal.protocol.IdentityKey
 import org.thoughtcrime.securesms.database.IdentityTable.VerifiedStatus
 import org.thoughtcrime.securesms.jobmanager.CoroutineJob
@@ -63,13 +64,22 @@ class MultiDeviceVerifiedUpdateJob private constructor(
 
   override fun getFactoryKey(): String = KEY
 
+  private fun trace(operation: String, vararg extra: Pair<String, Any?>) {
+    if (NetworkTrace.enabled) NetworkTrace.event(operation, mapOf(
+      "recipientId" to destination.toString(), "identityPublicKey" to Base64.encodeWithPadding(identityKey),
+      "verifiedStatus" to verifiedStatus.name, "timestamp" to timestamp
+    ) + extra)
+  }
+
   override suspend fun doRun(): Result {
+    trace("verified_sync_job_started")
     if (!Recipient.self().isRegistered) {
       Log.w(TAG, "Not registered, aborting...")
       return Result.failure()
     }
 
     if (!SignalStore.account.isMultiDevice) {
+      trace("verified_sync_job_skipped", "reason" to "not_multi_device")
       Log.i(TAG, "Not multi device...")
       return Result.success()
     }
@@ -77,6 +87,7 @@ class MultiDeviceVerifiedUpdateJob private constructor(
     val recipient = Recipient.resolved(destination)
 
     if (recipient.isUnregistered) {
+      trace("verified_sync_job_skipped", "reason" to "recipient_unregistered")
       Log.w(TAG, "${recipient.id} not registered!")
       return Result.failure()
     }
@@ -101,12 +112,12 @@ class MultiDeviceVerifiedUpdateJob private constructor(
     )
 
     return result.fold(
-      ifRight = { Result.success() },
+      ifRight = { trace("verified_sync_job_submitted", "remoteAci" to aci.toString()); Result.success() },
       ifLeft = { error -> error.toSyncJobResult(TAG, "verified sync", defaultBackoff()) }
     )
   }
 
-  override fun onFailure() = Unit
+  override fun onFailure() { trace("verified_sync_job_failed") }
 
   class Factory : Job.Factory<MultiDeviceVerifiedUpdateJob?> {
     override fun create(parameters: Parameters, serializedData: ByteArray?): MultiDeviceVerifiedUpdateJob {

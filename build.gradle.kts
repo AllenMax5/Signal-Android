@@ -48,7 +48,23 @@ tasks.withType<Wrapper> {
   distributionType = Wrapper.DistributionType.ALL
 }
 
+val experimentalLibsignalVersion = libs.versions.libsignal.debug.get()
+
 subprojects {
+  configurations.configureEach {
+    // Debug app and Android libraries use the prebuilt capture artifact; Release retains the upstream version.
+    if (name.contains("debug", ignoreCase = true) &&
+      (name.endsWith("CompileClasspath") || name.endsWith("RuntimeClasspath"))) {
+      resolutionStrategy.eachDependency {
+        if (requested.group == "org.signal" &&
+          requested.name in setOf("libsignal-client", "libsignal-android")) {
+          useVersion(experimentalLibsignalVersion)
+          because("Debug E2EE capture uses the locally published libsignal artifact")
+        }
+      }
+    }
+  }
+
   if (JavaVersion.current().isJava8Compatible) {
     allprojects {
       tasks.withType<Javadoc> {

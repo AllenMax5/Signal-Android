@@ -18,6 +18,7 @@ import org.signal.network.config.SignalStorageUrl
 import org.signal.network.config.SignalSvr2Url
 import org.signal.network.config.TrustStore
 import org.signal.network.exceptions.RequestCanceledException
+import org.signal.network.trace.TraceHttpInterceptor
 import org.thoughtcrime.securesms.BuildConfig
 import org.thoughtcrime.securesms.keyvalue.SettingsValues
 import org.thoughtcrime.securesms.keyvalue.SignalStore
@@ -153,7 +154,7 @@ class SignalServiceNetworkAccess(context: Context) {
     RemoteDeprecationDetectorInterceptor(this::getConfiguration),
     DeprecatedClientPreventionInterceptor(),
     DeviceTransferBlockingInterceptor.getInstance()
-  )
+  ) + if (BuildConfig.DEBUG) listOf(TraceHttpInterceptor()) else emptyList()
 
   /** [SystemClock.elapsedRealtime] until which [hasRecentDirectTransportFailure] stays true, or 0 for no active cooldown. */
   @Volatile

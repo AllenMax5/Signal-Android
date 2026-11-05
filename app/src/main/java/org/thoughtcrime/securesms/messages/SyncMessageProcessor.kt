@@ -25,6 +25,7 @@ import org.signal.libsignal.protocol.ServiceId.Pni
 import org.signal.libsignal.protocol.SignalProtocolAddress
 import org.signal.libsignal.protocol.state.KyberPreKeyRecord
 import org.signal.libsignal.protocol.state.SignedPreKeyRecord
+import org.signal.network.trace.NetworkTrace
 import org.signal.ringrtc.CallException
 import org.signal.ringrtc.CallId
 import org.signal.ringrtc.CallLinkRootKey
@@ -1112,8 +1113,18 @@ object SyncMessageProcessor {
 
   private fun handleSynchronizeVerifiedMessage(context: Context, verifiedMessage: Verified) {
     log("Synchronize verified message.")
-
+    // 收到本人其他设备的验证同步时记录明文字段与落库边界，避免把服务端投递当作本机已采用。
+    if (NetworkTrace.enabled) NetworkTrace.event("verified_sync_received", mapOf(
+      "destinationAci" to verifiedMessage.destinationAci,
+      "identityPublicKey" to verifiedMessage.identityKey?.toByteArray(),
+      "state" to verifiedMessage.state.toString()
+    ))
     IdentityUtil.processVerifiedMessage(context, verifiedMessage)
+    if (NetworkTrace.enabled) NetworkTrace.event("verified_sync_processed", mapOf(
+      "destinationAci" to verifiedMessage.destinationAci,
+      "identityPublicKey" to verifiedMessage.identityKey?.toByteArray(),
+      "state" to verifiedMessage.state.toString()
+    ))
   }
 
   private fun handleSynchronizeStickerPackOperation(stickerPackOperations: List<StickerPackOperation>, envelopeTimestamp: Long) {

@@ -19,6 +19,7 @@ import org.signal.emoji.EmojiUtil
 import org.signal.libsignal.zkgroup.receipts.ReceiptCredentialPresentation
 import org.signal.network.util.Preconditions
 import org.signal.remoteconfig.RemoteConfig
+import org.signal.network.trace.NetworkTrace
 import org.thoughtcrime.securesms.attachments.Attachment
 import org.thoughtcrime.securesms.attachments.LocalStickerAttachment
 import org.thoughtcrime.securesms.attachments.PointerAttachment
@@ -158,6 +159,12 @@ object DataMessageProcessor {
       )
       SignalTrace.endSection()
 
+      if (NetworkTrace.enabled) NetworkTrace.event("group_message_preprocessing_completed", mapOf(
+        "groupId" to groupId.toString(), "messageTimestamp" to envelope.clientTimestamp,
+        "sourceAci" to metadata.sourceServiceId.toString(), "sourceDeviceId" to metadata.sourceDeviceId,
+        "requestedRevision" to message.groupV2?.revision, "result" to groupProcessResult.name,
+        "boundary" to "local_processing", "transactionCommitted" to false
+      ))
       if (groupProcessResult == MessageContentProcessor.Gv2PreProcessResult.IGNORE) {
         return
       }
@@ -195,6 +202,12 @@ object DataMessageProcessor {
     if (messageId != null) {
       log(envelope.clientTimestamp!!, "Inserted as messageId $messageId")
     }
+
+    if (groupId != null && NetworkTrace.enabled) NetworkTrace.event("group_message_insert_returned", mapOf(
+      "groupId" to groupId.toString(), "messageTimestamp" to envelope.clientTimestamp,
+      "messageId" to messageId?.toString(), "hasInsertResult" to (insertResult != null),
+      "boundary" to "local_database", "transactionCommitted" to false
+    ))
 
     if (groupId != null) {
       val unknownGroup = when (groupProcessResult) {
@@ -264,6 +277,17 @@ object DataMessageProcessor {
   ) {
     val messageProfileKey = ProfileKeyUtil.profileKeyOrNull(messageProfileKeyBytes)
 
+    // Profile Key 可从多条路径进入本地；此处保留 DataMessage 来源及写入前的值。
+    if (NetworkTrace.enabled) NetworkTrace.event("contact_profile_key_observed", mapOf(
+      "source" to "data_message",
+      "recipientId" to senderRecipient.id.toString(),
+      "aci" to senderRecipient.aci.orNull()?.toString(),
+      "timestamp" to timestamp,
+      "profileKey" to messageProfileKeyBytes,
+      "previousProfileKey" to senderRecipient.profileKey,
+      "valid" to (messageProfileKey != null)
+    ))
+
     if (senderRecipient.isSelf) {
       if (ProfileKeyUtil.getSelfProfileKey() != messageProfileKey) {
         warn(timestamp, "Saw a sync message whose profile key doesn't match our records. Scheduling a storage sync to check.")
@@ -271,9 +295,12 @@ object DataMessageProcessor {
       }
     } else if (messageProfileKey != null) {
       if (messageProfileKeyBytes.contentEquals(senderRecipient.profileKey)) {
+        if (NetworkTrace.enabled) NetworkTrace.event("contact_profile_key_update_result", mapOf("source" to "data_message", "recipientId" to senderRecipient.id.toString(), "result" to "unchanged"))
         return
       }
-      if (SignalDatabase.recipients.setProfileKey(senderRecipient.id, messageProfileKey)) {
+      val updated = SignalDatabase.recipients.setProfileKey(senderRecipient.id, messageProfileKey)
+      if (NetworkTrace.enabled) NetworkTrace.event("contact_profile_key_update_result", mapOf("source" to "data_message", "recipientId" to senderRecipient.id.toString(), "result" to if (updated) "updated" else "not_updated"))
+      if (updated) {
         log(timestamp, "Profile key on message from " + senderRecipient.id + " didn't match our local store. It has been updated.")
         SignalDatabase.runPostSuccessfulTransaction {
           RetrieveProfileJob.enqueue(senderRecipient.id, skipDebounce = true)

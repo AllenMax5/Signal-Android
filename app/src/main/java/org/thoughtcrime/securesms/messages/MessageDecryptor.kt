@@ -62,6 +62,7 @@ import org.thoughtcrime.securesms.notifications.NotificationIds
 import org.thoughtcrime.securesms.recipients.Recipient
 import org.thoughtcrime.securesms.recipients.RecipientIds
 import org.thoughtcrime.securesms.util.SignalTrace
+import org.signal.network.trace.NetworkTrace
 import org.thoughtcrime.securesms.util.asChain
 import org.whispersystems.signalservice.api.InvalidMessageStructureException
 import org.whispersystems.signalservice.api.crypto.ContentHint
@@ -151,6 +152,12 @@ object MessageDecryptor {
     }
 
     val bufferedStore = bufferedProtocolStore.get(destination)
+    // 记录信封真正选择的身份域；已知 ACI 不意味着迟到的 PNI 消息改用 ACI 私钥解密。
+    if (NetworkTrace.enabled) NetworkTrace.event("inbound_identity_store_selected", mapOf(
+      "destination" to destination.toString(), "identityDomain" to if (destination == selfAci) "aci" else "pni",
+      "source" to sourceServiceId?.toString(), "sourceDeviceId" to envelope.sourceDeviceId,
+      "messageTimestamp" to envelope.clientTimestamp, "envelopeType" to envelope.type?.name
+    ))
     val localAddress = SignalServiceAddress(destination, SignalStore.account.e164)
     val cipher = SignalServiceCipher(localAddress, SignalStore.account.deviceId, bufferedStore, ReentrantSessionLock.INSTANCE, SealedSenderAccessUtil.getCertificateValidator())
 
@@ -159,6 +166,12 @@ object MessageDecryptor {
 
     val cipherResult: SignalServiceCipherResult? = try {
       cipher.decrypt(envelope, serverDeliveredTimestamp)
+        .also {
+          if (NetworkTrace.enabled) NetworkTrace.event("inbound_identity_decrypt_completed", mapOf(
+            "destination" to destination.toString(), "messageTimestamp" to envelope.clientTimestamp,
+            "identityDomain" to if (destination == selfAci) "aci" else "pni", "hasResult" to (it != null)
+          ))
+        }
     } catch (e: Exception) {
       return buildResultForDecryptionFailure(context, envelope, serverDeliveredTimestamp, followUpOperations, e)
     } finally {
@@ -446,8 +459,14 @@ object MessageDecryptor {
     Log.i(TAG, "${logPrefix(envelope, aci)} Processing PniSignatureMessage")
 
     val pni: PNI = PNI.parseOrThrow(pniSignatureMessage.pni!!.toByteArray())
+    // 签名验证与数据库合并分别记录，不能把收到声明当成关联已经通过验证。
+    if (NetworkTrace.enabled) NetworkTrace.event("pni_aci_association_received", mapOf(
+      "aci" to aci.toString(), "pni" to pni.toString(), "deviceId" to deviceId,
+      "messageTimestamp" to envelope.clientTimestamp, "signature" to pniSignatureMessage.signature!!.toByteArray()
+    ))
 
     if (SignalDatabase.recipients.isAssociated(aci, pni)) {
+      if (NetworkTrace.enabled) NetworkTrace.event("pni_aci_association_skipped", mapOf("aci" to aci.toString(), "pni" to pni.toString(), "reason" to "already_associated", "messageTimestamp" to envelope.clientTimestamp))
       Log.i(TAG, "${logPrefix(envelope, aci)}[handlePniSignatureMessage] ACI ($aci) and PNI ($pni) are already associated.")
       return
     }
@@ -458,6 +477,7 @@ object MessageDecryptor {
     var pniIdentity = protocolStore.getAciStore().getIdentity(pniAddress)
 
     if (aciIdentity == null) {
+      if (NetworkTrace.enabled) NetworkTrace.event("pni_aci_association_skipped", mapOf("aci" to aci.toString(), "pni" to pni.toString(), "reason" to "missing_aci_identity", "messageTimestamp" to envelope.clientTimestamp))
       Log.w(TAG, "${logPrefix(envelope, aci)}[validatePniSignature] No identity found for ACI address $aciAddress")
       return
     }
@@ -470,17 +490,22 @@ object MessageDecryptor {
         if (pniIdentity != null) {
           Log.w(TAG, "${logPrefix(envelope, aci)}[validatePniSignature] Found PNI identity when looking up device 1. Using that.")
         } else {
+          if (NetworkTrace.enabled) NetworkTrace.event("pni_aci_association_skipped", mapOf("aci" to aci.toString(), "pni" to pni.toString(), "reason" to "missing_pni_identity", "messageTimestamp" to envelope.clientTimestamp))
           Log.w(TAG, "${logPrefix(envelope, aci)}[validatePniSignature] No PNI identity when looking up device 1 either.")
           return
         }
       } else {
+        if (NetworkTrace.enabled) NetworkTrace.event("pni_aci_association_skipped", mapOf("aci" to aci.toString(), "pni" to pni.toString(), "reason" to "missing_pni_identity", "messageTimestamp" to envelope.clientTimestamp))
         return
       }
     }
 
-    if (pniIdentity.verifyAlternateIdentity(aciIdentity, pniSignatureMessage.signature!!.toByteArray())) {
+    val valid = pniIdentity.verifyAlternateIdentity(aciIdentity, pniSignatureMessage.signature!!.toByteArray())
+    if (NetworkTrace.enabled) NetworkTrace.event("pni_aci_association_verified", mapOf("aci" to aci.toString(), "pni" to pni.toString(), "aciIdentityPublicKey" to aciIdentity.serialize(), "pniIdentityPublicKey" to pniIdentity.serialize(), "valid" to valid, "messageTimestamp" to envelope.clientTimestamp))
+    if (valid) {
       Log.i(TAG, "${logPrefix(envelope, aci)}[validatePniSignature] PNI signature is valid. Associating ACI ($aci) with PNI ($pni)")
-      SignalDatabase.recipients.getAndPossiblyMergePnpVerified(aci, pni, e164)
+      val recipientId = SignalDatabase.recipients.getAndPossiblyMergePnpVerified(aci, pni, e164)
+      if (NetworkTrace.enabled) NetworkTrace.event("pni_aci_association_applied", mapOf("aci" to aci.toString(), "pni" to pni.toString(), "recipientId" to recipientId.toString(), "messageTimestamp" to envelope.clientTimestamp, "transactionCommitted" to false))
     } else {
       Log.w(TAG, "${logPrefix(envelope, aci)}[validatePniSignature] Invalid PNI signature! Cannot associate ACI ($aci) with PNI ($pni)")
     }

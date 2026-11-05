@@ -27,6 +27,7 @@ import org.signal.network.NetworkResult;
 import org.whispersystems.signalservice.api.account.AccountAttributes;
 import org.whispersystems.signalservice.api.account.PreKeyCollection;
 import org.whispersystems.signalservice.api.groupsv2.GroupsV2AuthorizationString;
+import org.whispersystems.signalservice.api.groupsv2.GroupTrace;
 import org.whispersystems.signalservice.api.messages.AttachmentTransferProgress;
 import org.whispersystems.signalservice.api.messages.SignalServiceAttachment.ProgressListener;
 import org.whispersystems.signalservice.api.messages.SignalServiceAttachmentRemoteId;
@@ -1354,13 +1355,16 @@ public class PushServiceSocket {
   public GroupResponse putNewGroupsV2Group(Group group, GroupsV2AuthorizationString authorization)
       throws NonSuccessfulResponseCodeException, PushNetworkException, IOException, MalformedResponseException
   {
+    GroupTrace.proto("group_create_request", "signal.Group", group::encode, "network_payload");
     try (Response response = makeStorageRequest(authorization.toString(),
                                                 GROUPSV2_GROUP,
                                                 "PUT",
                                                 protobufRequestBody(group),
                                                 GROUPS_V2_PUT_RESPONSE_HANDLER))
     {
-      return GroupResponse.ADAPTER.decode(readBodyBytes(response));
+      byte[] body = readBodyBytes(response);
+      GroupTrace.proto("group_state_response", "signal.GroupResponse", () -> body, "network_payload");
+      return GroupResponse.ADAPTER.decode(body);
     }
   }
 
@@ -1373,7 +1377,9 @@ public class PushServiceSocket {
                                                 null,
                                                 GROUPS_V2_GET_CURRENT_HANDLER))
     {
-      return GroupResponse.ADAPTER.decode(readBodyBytes(response));
+      byte[] body = readBodyBytes(response);
+      GroupTrace.proto("group_state_response", "signal.GroupResponse", () -> body, "network_payload");
+      return GroupResponse.ADAPTER.decode(body);
     }
   }
 
@@ -1393,6 +1399,7 @@ public class PushServiceSocket {
   public GroupChangeResponse patchGroupsV2Group(GroupChange.Actions groupChange, String authorization, Optional<byte[]> groupLinkPassword)
       throws NonSuccessfulResponseCodeException, PushNetworkException, IOException, MalformedResponseException
   {
+    GroupTrace.proto("group_patch_request", "signal.GroupChange.Actions", groupChange::encode, "network_payload");
     String path;
 
     if (groupLinkPassword.isPresent()) {
@@ -1407,7 +1414,9 @@ public class PushServiceSocket {
                                                 protobufRequestBody(groupChange),
                                                 GROUPS_V2_PATCH_RESPONSE_HANDLER))
     {
-      return GroupChangeResponse.ADAPTER.decode(readBodyBytes(response));
+      byte[] body = readBodyBytes(response);
+      GroupTrace.proto("group_patch_response", "signal.GroupChangeResponse", () -> body, "network_payload");
+      return GroupChangeResponse.ADAPTER.decode(body);
     }
   }
 
@@ -1429,7 +1438,9 @@ public class PushServiceSocket {
         throw new PushNetworkException("No body!");
       }
 
-      GroupChanges groupChanges = GroupChanges.ADAPTER.decode(readBodyBytes(response));
+      byte[] body = readBodyBytes(response);
+      GroupTrace.proto("group_history_response", "signal.GroupChanges", () -> body, "network_payload");
+      GroupChanges groupChanges = GroupChanges.ADAPTER.decode(body);
 
       if (response.code() == 206) {
         String                 contentRangeHeader = response.header("Content-Range");

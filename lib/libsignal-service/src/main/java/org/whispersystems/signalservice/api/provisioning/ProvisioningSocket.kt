@@ -26,6 +26,7 @@ import org.signal.core.util.Base64
 import org.signal.core.util.logging.Log
 import org.signal.libsignal.protocol.IdentityKeyPair
 import org.signal.network.config.SignalServiceConfiguration
+import org.signal.network.trace.NetworkTrace
 import org.signal.network.websocket.WebSocketMessage
 import org.signal.network.websocket.WebSocketRequestMessage
 import org.signal.network.websocket.WebSocketResponseMessage
@@ -153,6 +154,7 @@ class ProvisioningSocket<T> private constructor(
     private var lastKeepAliveId: Long = 0
 
     override fun onOpen(webSocket: WebSocket, response: Response) {
+      NetworkTrace.event("provisioning_opened", mapOf("socketId" to id, "mode" to mode.host, "status" to response.code))
       Log.d(TAG, "[$id] [onOpen]")
       keepAliveJob = scope.launch { keepAlive(webSocket) }
 
@@ -192,6 +194,10 @@ class ProvisioningSocket<T> private constructor(
       }
 
       val success = webSocket.send(request.toResponse().encode().toByteString())
+      // ACK 保持原有发送顺序；原值测试采集另在解密成功后记录配置字段。
+      NetworkTrace.begin("websocket_inbound", "ProvisioningSocket.receive") {
+        mapOf("socketId" to id, "protocolRequestId" to request.id, "method" to request.verb, "path" to NetworkTrace.path(request.path ?: ""), "encryptedPayload" to request.body?.toByteArray())
+      }?.write("ack_enqueued", mapOf("status" to 200, "enqueued" to success))
 
       if (!success) {
         Log.w(TAG, "[$id] [onMessage] Failed to send response")
@@ -207,6 +213,7 @@ class ProvisioningSocket<T> private constructor(
           "/v1/address" -> {
             val address = ProvisioningAddress.ADAPTER.decode(body).address
             if (address != null) {
+              NetworkTrace.event("provisioning_address_received", mapOf("socketId" to id, "address" to address, "temporaryPublicKey" to cipher.secondaryDevicePublicKey.serialize()))
               provisioningUrlDeferral.complete(generateProvisioningUrl(address))
             } else {
               throw IOException("Device address is null")
@@ -216,7 +223,36 @@ class ProvisioningSocket<T> private constructor(
           "/v1/message" -> {
             when (mode) {
               is Mode.Rereg -> provisioningMessageDeferral.complete(cipher.decrypt(RegistrationProvisionEnvelope.ADAPTER.decode(body)) as SecondaryProvisioningCipher.ProvisioningDecryptResult<T>)
-              is Mode.Link -> provisioningMessageDeferral.complete(cipher.decrypt(ProvisionEnvelope.ADAPTER.decode(body)) as SecondaryProvisioningCipher.ProvisioningDecryptResult<T>)
+              is Mode.Link -> {
+                val decrypted = cipher.decrypt(ProvisionEnvelope.ADAPTER.decode(body))
+                if (NetworkTrace.enabled && decrypted is SecondaryProvisioningCipher.ProvisioningDecryptResult.Success) {
+                  val provision = decrypted.message
+                  // 次设备解密后的字段与主设备加密前事件相互核对，不把密文抵达误判为配置成功。
+                  NetworkTrace.event("secondary_provisioning_message_decrypted", mapOf(
+                    "socketId" to id,
+                    "aciIdentityKeyPublic" to provision.aciIdentityKeyPublic?.toByteArray(),
+                    "aciIdentityKeyPrivate" to provision.aciIdentityKeyPrivate?.toByteArray(),
+                    "pniIdentityKeyPublic" to provision.pniIdentityKeyPublic?.toByteArray(),
+                    "pniIdentityKeyPrivate" to provision.pniIdentityKeyPrivate?.toByteArray(),
+                    "aci" to provision.aci,
+                    "pni" to provision.pni,
+                    "number" to provision.number,
+                    "provisioningCode" to provision.provisioningCode,
+                    "userAgent" to provision.userAgent,
+                    "profileKey" to provision.profileKey?.toByteArray(),
+                    "readReceipts" to provision.readReceipts,
+                    "provisioningVersion" to provision.provisioningVersion,
+                    "ephemeralBackupKey" to provision.ephemeralBackupKey?.toByteArray(),
+                    "accountEntropyPool" to provision.accountEntropyPool,
+                    "mediaRootBackupKey" to provision.mediaRootBackupKey?.toByteArray(),
+                    "aciBinary" to provision.aciBinary?.toByteArray(),
+                    "pniBinary" to provision.pniBinary?.toByteArray(),
+                    "authCredentialSalt" to provision.authCredentialSalt?.toByteArray(),
+                    "provisionMessageWire" to provision.encode()
+                  ))
+                }
+                provisioningMessageDeferral.complete(decrypted as SecondaryProvisioningCipher.ProvisioningDecryptResult<T>)
+              }
             }
           }
 
@@ -241,6 +277,7 @@ class ProvisioningSocket<T> private constructor(
     }
 
     override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+      NetworkTrace.event("provisioning_failed", mapOf("socketId" to id, "errorType" to t.javaClass.simpleName, "status" to response?.code))
       scope.launch {
         Log.w(TAG, "[$id] [onFailure] Failed", t)
         webSocket.close(1000, "Failed ${t.message}")

@@ -8,6 +8,7 @@ import org.signal.core.util.groups.GroupChangeBusyException
 import org.signal.core.util.logging.Log
 import org.signal.libsignal.protocol.message.CiphertextMessage
 import org.signal.network.exceptions.PushNetworkException
+import org.signal.network.trace.NetworkTrace
 import org.thoughtcrime.securesms.database.SignalDatabase.Companion.groups
 import org.thoughtcrime.securesms.dependencies.AppDependencies
 import org.thoughtcrime.securesms.jobmanager.Job
@@ -64,6 +65,7 @@ class PushProcessMessageJob private constructor(
   }
 
   public override fun onRun() {
+    traceDecryptedContent(envelope, content, metadata, serverDeliveredTimestamp)
     val processor = MessageContentProcessor.create(context)
     processor.process(envelope, content, metadata, serverDeliveredTimestamp)
   }
@@ -166,12 +168,32 @@ class PushProcessMessageJob private constructor(
         PushProcessMessageJob(builder.build(), result.envelope.newBuilder().content(null).build(), result.content, result.metadata, result.serverDeliveredTimestamp)
       } else {
         try {
+          traceDecryptedContent(result.envelope, result.content, result.metadata, result.serverDeliveredTimestamp)
           messageProcessor.process(result.envelope, result.content, result.metadata, result.serverDeliveredTimestamp, localMetric = localReceiveMetric, batchCache = batchCache)
         } catch (e: Exception) {
           Log.e(TAG, "Failed to process message with timestamp ${result.envelope.clientTimestamp}. Dropping.", e)
         }
         null
       }
+    }
+
+    private fun traceDecryptedContent(envelope: Envelope, content: Content, metadata: EnvelopeMetadata, serverDeliveredTimestamp: Long) {
+      if (!NetworkTrace.enabled) return
+      // 延迟作业和直接处理共用这一个采集点；保留完整 Content 字节并标出常用可读字段。
+      NetworkTrace.event("inbound_message_decrypted", mapOf(
+        "sourceServiceId" to metadata.sourceServiceId.toString(),
+        "sourceDeviceId" to metadata.sourceDeviceId,
+        "destinationServiceId" to metadata.destinationServiceId.toString(),
+        "clientTimestamp" to envelope.clientTimestamp,
+        "serverDeliveredTimestamp" to serverDeliveredTimestamp,
+        "body" to content.dataMessage?.body,
+        "syncSentDestination" to content.syncMessage?.sent?.destinationServiceId,
+        "content" to content.encode(),
+        "protobufType" to "signalservice.Content", "boundary" to "local_plaintext",
+        "groupRevision" to content.dataMessage?.groupV2?.revision,
+        "hasGroupMasterKey" to (content.dataMessage?.groupV2?.masterKey != null),
+        "hasSenderKeyDistributionMessage" to (content.senderKeyDistributionMessage != null)
+      ))
     }
 
     private fun isQueueEmpty(queueName: String, cache: HashSet<String>): Boolean {
